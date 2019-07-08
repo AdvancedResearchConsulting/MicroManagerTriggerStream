@@ -1,0 +1,261 @@
+//Grab MDA settings and push to TG3
+//Note this was built on MM 2.0 BETA, haven't tried it in Gamma
+//Contact Austin Blanco @ Advanced Research Consulting for questions or support 
+// V 1.00
+/*
+ * TODO
+ * - add auto grab of serial port
+ * - add auto grab of BAUD
+ * - find a way to add in Z true position data for meta/images
+ * - need to add in active channel data to meta for images
+ * 
+ */
+
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.micromanager.api.AcquisitionOptions;
+import java.lang.System;
+import ij.gui.GenericDialog;
+
+
+//vars for global use
+port = "COM30"; //enter triggerscope COM port here
+lambda = new ArrayList();
+int [][] dacArray = new int[10] [16]; //an array to hold values for the DAC channel
+int [][] ttlArray = new int[10] [16]; //an array to hold values for the TTL channel
+int progline = 0;
+debugger = false; //flag off to disable output
+
+print("																																					Setting up MDA");
+settings = mm.acquisitions().getAcquisitionSettings();
+
+print ("Write Files to: "+ settings.root + "/" + settings.prefix);
+channels = settings.channels;
+String activeGroup = settings.channelGroup;
+exposureMs = mmc.getExposure();
+print ("Camera Exposure = " + exposureMs);
+
+
+
+if(debugger) {print("Active Lambda Group = "+activeGroup); }
+
+int i=0;
+for(c : channels) {
+	if(debugger) {print(channels.get(i).config);}
+	lambda.add(i); //collect used presets
+	i++;
+}
+
+//prep Z variables
+i = 0;
+zStart = 0;
+zEnd = 0;
+zStep = 0;
+zDirection = false;
+
+for (z : settings.slices) {
+	 if(i == 0) { zStart = z; } //get start 
+	 zEnd = z; //will end up with stop
+	 zStep = i; //will end up @ steps
+     if(debugger) { print("Slice: " + i + ", is at: " + z); }
+     i++;
+}
+
+//figure out Z step size per slize and direction fo travel
+if(zStart < zEnd) {
+	zStep = (zEnd - zStart) / zStep;
+	zDirection = true;
+	}
+if (zStart > zEnd) {
+	zStep = (zStart - zEnd) / zStep;
+	zDirection = false;
+	}
+
+//get # timelapse points
+int timeloops = settings.numFrames;
+if(debugger) {print("Timelapse Loops = " +timeloops);}
+
+/****checks the acquisition order
+ * mode 0 == channel first eg set ch1 stweep Z
+ * mode 1 == Z first EG step Z then Ch1 Ch2 then Step Z ...
+ * ***Need to test this!
+ */
+int mode = 0;
+if(settings.slicesFirst) {mode = 1;}
+print("Mode:"+mode);
+
+//get CHANNEL INFO USED FOR THIS SCAN
+mmcorej.StrVector configs = mmc.getAvailableConfigGroups();
+
+for (int i=0; i<configs.size(); i++) {
+    mmcorej.StrVector presets = mmc.getAvailableConfigs((configs.get(i)));
+    for (int j=0;  j<presets.size(); j++) {
+        mmcorej.Configuration config = mmc.getConfigData(configs.get(i), presets.get(j)); 
+       
+        if(configs.get(i).equals(activeGroup) ) {
+        		if(debugger) {print("Configuration " + configs.get(i) + "-" + presets.get(j));}
+        
+        		for (int k=0; k<config.size(); k++) {
+           		mmcorej.PropertySetting s = config.getSetting(k);
+           		
+           		if(s.getDeviceLabel().contains("Trig") ) { //only list triggerscope settings
+           			if(debugger) { print(" " + s.getDeviceLabel() + ", " + s.getPropertyName() + ", " + s.getPropertyValue()); }
+						if(s.getDeviceLabel().contains("Trig") ) { //only list triggerscope settings
+							
+							if (s.getDeviceLabel().contains("DA") ) { //grab DAC Values
+									str = s.getDeviceLabel().replaceAll("\\D+","" ); //pull DAC number
+									strb = s.getPropertyValue().replaceAll("\\.D","" ); //pull DAC Value in VOLTS
+									float f = Float.parseFloat(strb);
+									int dn = Integer.parseInt(str);
+									int dacVal = 65536 * (f /10)	;
+									if(debugger) {
+										print("Dac Line:"+ str + "=" +strb);
+										print(" Digital Line = "+ dn +" @ " + dacVal );
+										print("Program Line = " + progline);
+									}
+									dacArray[progline][dn-1] = dacVal ;			
+			      			}
+							
+							if (s.getDeviceLabel().contains("TTL") ) { //grab DAC Values
+									str = s.getDeviceLabel().replaceAll("\\D+","" ); //pull DAC number
+									strb = s.getPropertyValue().replaceAll("\\D","" ); //pull TTL Value
+									int ttv = Integer.parseInt(strb);
+									int ttn = Integer.parseInt(str);
+									if(debugger) {
+										print("TTL Line:"+ str + "=" +strb); 
+										print(" Digital Line = "+ ttn +" @ " + ttv );
+									}	
+									ttlArray[progline][ttn-1] = ttv ;					
+			      			}
+						} 
+         		}
+           	}
+         progline++;
+         }
+     }
+	}
+
+
+//Report sequence code
+print("Z Start = " + zStart + ", Z Stop = " + zEnd +", Step Size = " + zStep + ", Direction = " + zDirection);
+String tout = "";
+String dout = "";
+print("TTL Configuration....");
+	for(int d = 0;d < progline;d++) { //print all program lines
+		for(int t = 0;t < 16;++t) { //print all 16 outputs
+			tout = tout + ttlArray[d][t] + ","; 
+		}	
+		print("Program Line" + d +" = " + tout);
+		tout = ""; 
+	}
+print("DAC Configuration....");
+	for(int d = 0;d < progline;d++) { //print all program lines
+		for(int t = 0;t < 16;++t) { //print all 16 outputs
+			dout = dout + dacArray[d][t] + ","; 
+		}	
+		print("Program Line" + d +" = " + dout);
+		dout = ""; 
+	}
+
+nrFrames = timeloops * progline; //total images to acquire
+print("Will capture " + nrFrames + " images in a high speed triggered sequence");
+
+	
+GenericDialog dlg = new GenericDialog("Arm and Capture?", null);
+dlg.addMessage("Arm Triggerscope and capture Sequence Now?");
+runcapture = false;
+
+dlg.showDialog();
+if (dlg.wasCanceled()) {
+   print("Canel Pressed");
+}
+else {runcapture = true; print( "Beginning Acquisition....");   }
+
+	/*******************************************     LOAD And CApture Sequence HERE *************/
+//create doc store for stream
+store = mm.data().createRAMDatastore();
+// Create a display to show images as they are acquired.
+mm.displays().createDisplay(store);
+
+
+
+//Load up Triggerscope
+if(runcapture) {//ready to start acquisition per user
+	tout = "";
+	tout = "TIMECYCLES," + timeloops;
+	mmc.setSerialPortCommand(port,tout,"\n");
+	answer = mmc.getSerialPortAnswer(port, "\n");
+	
+	String answer = "";
+	tout = "";
+	dout = "";
+	for(int d = 0;d < progline;d++) { //load all TTL lines
+		for(int t = 0;t < 16;++t) { //print all 16 outputs
+			tout = "PROG_TTL," + (d+1) + "," + (t+1) + "," + ttlArray[d][t];
+			mmc.setSerialPortCommand(port,tout,"\n");
+			answer = mmc.getSerialPortAnswer(port, "\n");
+			//print(answer);
+			//Thread.sleep(5);			 
+		}	
+		for(int t = 0;t < 15;++t) { //load all DAC lines
+			dout = dout + dacArray[d][t] + ","; 
+			dout = "PROG_DAC," + (d+1) + "," + (t+1) + "," + dacArray[d][t];
+			mmc.setSerialPortCommand(port,dout,"\n");
+			answer = mmc.getSerialPortAnswer(port, "\n");
+			//print(answer);	
+			//Thread.sleep(5);		 
+		}	
+	}
+	//ARM System
+	mmc.setSerialPortCommand(port,"ARM","\n");
+	Thread.sleep(5);
+	print(mmc.getSerialPortAnswer(port, "\n"));
+	
+}
+
+// Start collecting images.  **AB Note this is mostly copied form burstacquire example!
+// Arguments are the number of images to collect, the amount of time to wait
+// between images, and whether or not to halt the acquisition if the
+// sequence buffer overflows.
+mmc.startSequenceAcquisition(nrFrames, 0, true);
+// Set up a Coords.CoordsBuilder for applying coordinates to each image.
+builder = mm.data().getCoordsBuilder().z(0).channel(0).stagePosition(0);
+int curFrame = 0;
+while (mmc.getRemainingImageCount() > 0 || mmc.isSequenceRunning(mmc.getCameraDevice())) {
+   if (mmc.getRemainingImageCount() > 0) {
+      tagged = mmc.popNextTaggedImage();
+      // Convert to an Image at the desired timepoint.
+      image = mm.data().convertTaggedImage(tagged,
+         builder.time(curFrame).build(), null);
+      store.putImage(image);
+      curFrame++;
+   }
+   else {
+      // Wait for another image to arrive.
+      mmc.sleep(Math.min(.5 * exposureMs, 20));
+   }
+}
+
+mmc.stopSequenceAcquisition();
+// Have Micro-Manager handle logic for ensuring data is saved to disk.
+mm.displays().manage(store);
+
+ 
+      //gui.message("Acquiring frame " + i + ", channel " + channels[j] + ".");
+//Load Program Arrays into Triggerscope
+
+/*
+ * Sequence Focus Programming	PROG_FOCUS,int Start, int Step,Int #steps,boolean direction,boolean slave	!…..inputs	NO NEGATIVES
+ * Sequence Focus Programming	PROG_FOCUS,int Start, int Step,Int #steps,boolean direction,boolean slave	!…..inputs	NO NEGATIVES
+ * Sequence TTL Programming	PROG_TTL,int Program Line#, int TTL #, Boolean On/Off	!...	MaxProg Set by high #
+ * Sequence DAC Programming	PROG_DAC,int Program Line#, int DAC #, int 16 bit output (0-65535)	!...	MaxProg Set by high # 
+ * Delay Array Programming	PROG_DEL , int program line #, int millisecond delay	!...	Watch Timeout
+ * 
+ * 
+ * 
+ */
+			
+			
+			
+			
