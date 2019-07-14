@@ -6,9 +6,10 @@
  * TODO
  * - add auto grab of serial port
  * - add auto grab of BAUD
- * - find a way to add in Z true position data for meta/images
+ * - ***Channels is NOT working correctly. It grabs all presets no matter chich are used!
+ * 		need to run a compare between lambda and the channels indexed.
  * - need to add in active channel data to meta for images
- * 
+ * - test various combo's of time off, time set to 0, z off and on, channel off and on etc. 
  */
 
 
@@ -18,6 +19,11 @@ import org.micromanager.api.AcquisitionOptions;
 import java.lang.System;
 import ij.gui.GenericDialog;
 
+//for storing image data
+import org.micromanager.data.Coords;
+import org.micromanager.data.Image;
+import org.micromanager.data.Datastore;
+import org.micromanager.display.DisplayWindow;
 
 //vars for global use
 port = "COM30"; //enter triggerscope COM port here
@@ -27,6 +33,14 @@ int [][] ttlArray = new int[10] [16]; //an array to hold values for the TTL chan
 int progline = 0;
 debugger = false; //flag off to disable output
 
+boolean tgsWrite(String inData) {
+	mmc.setSerialPortCommand(port,inData,"\n");
+	tgAnswer = mmc.getSerialPortAnswer(port, "\n");
+	print(tgAnswer);
+	Thread.sleep(5);
+	return true;	
+}
+
 print("																																					Setting up MDA");
 settings = mm.acquisitions().getAcquisitionSettings();
 
@@ -35,8 +49,6 @@ channels = settings.channels;
 String activeGroup = settings.channelGroup;
 exposureMs = mmc.getExposure();
 print ("Camera Exposure = " + exposureMs);
-
-
 
 if(debugger) {print("Active Lambda Group = "+activeGroup); }
 
@@ -79,11 +91,10 @@ if(debugger) {print("Timelapse Loops = " +timeloops);}
 /****checks the acquisition order
  * mode 0 == channel first eg set ch1 stweep Z
  * mode 1 == Z first EG step Z then Ch1 Ch2 then Step Z ...
- * ***Need to test this!
  */
 int mode = 0;
 if(settings.slicesFirst) {mode = 1;}
-print("Mode:"+mode);
+print("Z Sweep Mode:"+mode);
 
 //get CHANNEL INFO USED FOR THIS SCAN
 mmcorej.StrVector configs = mmc.getAvailableConfigGroups();
@@ -136,9 +147,16 @@ for (int i=0; i<configs.size(); i++) {
      }
 	}
 
+//create int values for FOCUS
+	double zNumsteps = 0;
+if( zStep != 0) {
 
-//Report sequence code
-print("Z Start = " + zStart + ", Z Stop = " + zEnd +", Step Size = " + zStep + ", Direction = " + zDirection);
+	if(zDirection) {zNumsteps = ((zEnd - zStart) / zStep)+1;}
+		else zNumsteps = ((zStart - zEnd) / zStep)+1;
+}
+//Report Z sequence code
+print("Z Start = " + zStart + ", Z Stop = " + zEnd +", Step Size = " + zStep + ", Direction = " + zDirection + ", Number of Slices = " + zNumsteps);
+
 String tout = "";
 String dout = "";
 print("TTL Configuration....");
@@ -158,7 +176,7 @@ print("DAC Configuration....");
 		dout = ""; 
 	}
 
-nrFrames = timeloops * progline; //total images to acquire
+nrFrames = timeloops * progline * (int)zNumsteps; //total images to acquire
 print("Will capture " + nrFrames + " images in a high speed triggered sequence");
 
 	
@@ -178,33 +196,45 @@ store = mm.data().createRAMDatastore();
 // Create a display to show images as they are acquired.
 mm.displays().createDisplay(store);
 
-
-
 //Load up Triggerscope
 if(runcapture) {//ready to start acquisition per user
+	
+	String answer = ""; //a reply buffer
+	//clear any previous settings from unit
+	tout = "";
+	tout = "CLEAR_ALL";
+	if(!tgsWrite(tout)){print("Transmit Error...)"); }
+	
+	//configure number of timepoints
 	tout = "";
 	tout = "TIMECYCLES," + timeloops;
-	mmc.setSerialPortCommand(port,tout,"\n");
-	answer = mmc.getSerialPortAnswer(port, "\n");
+	if(!tgsWrite(tout)){print("Transmit Error...)"); }
+
+	if(zStep != 0 ) { //only load Z if there's a useable strp size
+		//configure Z stacks
+		int zStartInt 	= 	zStart *65.535	;
+		int zNumsInt 	= 	zNumsteps		;
+		int zStepInt	=  zStep	 *65.536	; 
+		int ZDI = 0;
+		if(zDirection){ZDI=1;} //simple convert to int from bool
+		tout = "";
+		tout = "PROG_FOCUS,"+zStartInt+","+zStepInt+","+zNumsInt+","+ZDI+","+mode;
+		print(tout);
+		if(!tgsWrite(tout)){print("Transmit Error...)"); }
+	}
 	
-	String answer = "";
 	tout = "";
 	dout = "";
 	for(int d = 0;d < progline;d++) { //load all TTL lines
 		for(int t = 0;t < 16;++t) { //print all 16 outputs
 			tout = "PROG_TTL," + (d+1) + "," + (t+1) + "," + ttlArray[d][t];
-			mmc.setSerialPortCommand(port,tout,"\n");
-			answer = mmc.getSerialPortAnswer(port, "\n");
-			//print(answer);
-			//Thread.sleep(5);			 
+			if(!tgsWrite(tout)){print("Transmit Error...)"); }		 
 		}	
 		for(int t = 0;t < 15;++t) { //load all DAC lines
 			dout = dout + dacArray[d][t] + ","; 
 			dout = "PROG_DAC," + (d+1) + "," + (t+1) + "," + dacArray[d][t];
-			mmc.setSerialPortCommand(port,dout,"\n");
-			answer = mmc.getSerialPortAnswer(port, "\n");
-			//print(answer);	
-			//Thread.sleep(5);		 
+			if(!tgsWrite(dout)){print("Transmit Error...)"); }
+		 
 		}	
 	}
 	//ARM System
@@ -212,38 +242,75 @@ if(runcapture) {//ready to start acquisition per user
 	Thread.sleep(5);
 	print(mmc.getSerialPortAnswer(port, "\n"));
 	
+	// Start collecting images.  **AB Note this is mostly copied form burstacquire example!
+	// Arguments are the number of images to collect, the amount of time to wait
+	// between images, and whether or not to halt the acquisition if the
+	// sequence buffer overflows.
+
+	mmc.startSequenceAcquisition(nrFrames, 0, true);
+	builder = mm.data().getCoordsBuilder().z(0).channel(0).stagePosition(0);
+	int curFrame = 0;
+	int channel = 0;
+	int slice=0;
+
+	while (mmc.getRemainingImageCount() > 0 || mmc.isSequenceRunning(mmc.getCameraDevice())) {
+	   if (mmc.getRemainingImageCount() > 0) {
+	      tagged = mmc.popNextTaggedImage();
+	      image = mm.data().convertTaggedImage(tagged,builder.time(curFrame).channel(channel).z(slice).build(), null);
+	      store.putImage(image);
+	      
+	      //handle placing images in the right location
+	      if(zStep == 0) {
+	      	++channel;
+		      if(channel == progline){
+		      	channel=0;
+		      	curFrame++;
+		   	} //resets channel to 0 when required
+	      } //iterate on channel if only dimension used - timelapse shouldn't affect this
+	      
+	      if(zStep != 0) { // z sweep active
+	      	
+	      	if(mode == 0) { //sweep all z then step channel
+		      	++slice;
+		      	
+		      	if(slice == (int)zNumsteps) { //got to end of sweep
+		      		++channel; //switch channel
+		      		slice=0;  //reet Z to 0
+		      	}
+		         if(channel == progline){
+			      	channel=0;
+			      	curFrame++;
+			   	} //resets channel to 0 when required
+		      
+	      	}
+	      
+	      }
+	   }
+	   else {
+	      // Wait for another image to arrive.
+	      mmc.sleep(Math.min(.5 * exposureMs, 20));
+	   }
+	}
+	
+	mmc.stopSequenceAcquisition();
+	// Have Micro-Manager handle logic for ensuring data is saved to disk.
+	mm.displays().manage(store);
 }
 
-// Start collecting images.  **AB Note this is mostly copied form burstacquire example!
-// Arguments are the number of images to collect, the amount of time to wait
-// between images, and whether or not to halt the acquisition if the
-// sequence buffer overflows.
-mmc.startSequenceAcquisition(nrFrames, 0, true);
-// Set up a Coords.CoordsBuilder for applying coordinates to each image.
-builder = mm.data().getCoordsBuilder().z(0).channel(0).stagePosition(0);
-int curFrame = 0;
-while (mmc.getRemainingImageCount() > 0 || mmc.isSequenceRunning(mmc.getCameraDevice())) {
-   if (mmc.getRemainingImageCount() > 0) {
-      tagged = mmc.popNextTaggedImage();
-      // Convert to an Image at the desired timepoint.
-      image = mm.data().convertTaggedImage(tagged,
-         builder.time(curFrame).build(), null);
-      store.putImage(image);
-      curFrame++;
-   }
-   else {
-      // Wait for another image to arrive.
-      mmc.sleep(Math.min(.5 * exposureMs, 20));
-   }
-}
 
-mmc.stopSequenceAcquisition();
-// Have Micro-Manager handle logic for ensuring data is saved to disk.
-mm.displays().manage(store);
 
- 
-      //gui.message("Acquiring frame " + i + ", channel " + channels[j] + ".");
-//Load Program Arrays into Triggerscope
+
+
+
+
+
+
+
+
+
+
+
+//gui.message("Acquiring frame " + i + ", channel " + channels[j] + ".");
 
 /*
  * Sequence Focus Programming	PROG_FOCUS,int Start, int Step,Int #steps,boolean direction,boolean slave	!…..inputs	NO NEGATIVES
