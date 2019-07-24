@@ -4,10 +4,12 @@
 // V 1.00
 /*
  * TODO
+ * - KNOWN Settings oddities
+ * - > Timelapse must be on and set to == 1 or < 
+ * - > CHANNELS must be either no included in channels list or included + used (checkbox=on)
  * - add auto grab of serial port
  * - add auto grab of BAUD
- * - ***Channels is NOT working correctly. It grabs all presets no matter chich are used!
- * 		need to run a compare between lambda and the channels indexed.
+ * 
  * - need to add in active channel data to meta for images
  * - test various combo's of time off, time set to 0, z off and on, channel off and on etc. 
  */
@@ -36,7 +38,7 @@ debugger = false; //flag off to disable output
 boolean tgsWrite(String inData) {
 	mmc.setSerialPortCommand(port,inData,"\n");
 	tgAnswer = mmc.getSerialPortAnswer(port, "\n");
-	print(tgAnswer);
+	//print(tgAnswer);
 	Thread.sleep(5);
 	return true;	
 }
@@ -54,8 +56,8 @@ if(debugger) {print("Active Lambda Group = "+activeGroup); }
 
 int i=0;
 for(c : channels) {
-	if(debugger) {print(channels.get(i).config);}
-	lambda.add(i); //collect used presets
+	lambda.add(channels.get(i).config); //collect used presets
+	if(debugger) {print(lambda.get(i));}
 	i++;
 }
 
@@ -100,16 +102,24 @@ print("Z Sweep Mode:"+mode);
 mmcorej.StrVector configs = mmc.getAvailableConfigGroups();
 
 for (int i=0; i<configs.size(); i++) {
-    mmcorej.StrVector presets = mmc.getAvailableConfigs((configs.get(i)));
+	 mmcorej.StrVector presets = mmc.getAvailableConfigs((configs.get(i)));
     for (int j=0;  j<presets.size(); j++) {
         mmcorej.Configuration config = mmc.getConfigData(configs.get(i), presets.get(j)); 
        
         if(configs.get(i).equals(activeGroup) ) {
         		if(debugger) {print("Configuration " + configs.get(i) + "-" + presets.get(j));}
-        
+
+		  boolean configUsed = false;	
+		  for (int i = 0; i < lambda.size(); i++) { //check to see if the preset is actually used in the MDA window
+				//print(presets.get(j) +" and " +lambda.get(i));
+				if(presets.get(j).equals(lambda.get(i))) {
+				    configUsed = true; print("matched: "+lambda.get(i));
+				} 
+		  }	
+					
+			if(configUsed) {
         		for (int k=0; k<config.size(); k++) {
            		mmcorej.PropertySetting s = config.getSetting(k);
-           		
            		if(s.getDeviceLabel().contains("Trig") ) { //only list triggerscope settings
            			if(debugger) { print(" " + s.getDeviceLabel() + ", " + s.getPropertyName() + ", " + s.getPropertyValue()); }
 						if(s.getDeviceLabel().contains("Trig") ) { //only list triggerscope settings
@@ -134,18 +144,19 @@ for (int i=0; i<configs.size(); i++) {
 									int ttv = Integer.parseInt(strb);
 									int ttn = Integer.parseInt(str);
 									if(debugger) {
-										print("TTL Line:"+ str + "=" +strb); 
-										print(" Digital Line = "+ ttn +" @ " + ttv );
-									}	
+											print("TTL Line:"+ str + "=" +strb); 
+											print(" Digital Line = "+ ttn +" @ " + ttv );
+										}	
 									ttlArray[progline][ttn-1] = ttv ;					
 			      			}
 						} 
          		}
            	}
-         progline++;
-         }
-     }
+				progline++;
+			}
+   	} 
 	}
+}
 
 //create int values for FOCUS
 	double zNumsteps = 0;
@@ -175,8 +186,9 @@ print("DAC Configuration....");
 		print("Program Line" + d +" = " + dout);
 		dout = ""; 
 	}
-
-nrFrames = timeloops * progline * (int)zNumsteps; //total images to acquire
+nrFrames=0;
+if( zStep != 0) { nrFrames = timeloops * progline * (int)zNumsteps;}//total images to acquire
+else nrFrames = timeloops * progline;
 print("Will capture " + nrFrames + " images in a high speed triggered sequence");
 
 	
@@ -233,8 +245,7 @@ if(runcapture) {//ready to start acquisition per user
 		for(int t = 0;t < 15;++t) { //load all DAC lines
 			dout = dout + dacArray[d][t] + ","; 
 			dout = "PROG_DAC," + (d+1) + "," + (t+1) + "," + dacArray[d][t];
-			if(!tgsWrite(dout)){print("Transmit Error...)"); }
-		 
+			if(!tgsWrite(dout)){print("Transmit Error...)"); }	 
 		}	
 	}
 	//ARM System
@@ -272,7 +283,6 @@ if(runcapture) {//ready to start acquisition per user
 	      	
 	      	if(mode == 0) { //sweep all z then step channel
 		      	++slice;
-		      	
 		      	if(slice == (int)zNumsteps) { //got to end of sweep
 		      		++channel; //switch channel
 		      		slice=0;  //reet Z to 0
@@ -280,8 +290,18 @@ if(runcapture) {//ready to start acquisition per user
 		         if(channel == progline){
 			      	channel=0;
 			      	curFrame++;
-			   	} //resets channel to 0 when required
-		      
+			   	} //resets channel to 0 when required		      
+	      	}	      
+	      if(mode == 1) { //Step channels then step Z
+		      	++channel;
+		      	if(channel == progline) { //got to end of channels
+		      		++slice; //switch channel
+		      		channel=0;  //reet channel to 0
+		      	}
+		         if(channel == progline){
+			      	channel=0;
+			      	curFrame++;
+			   	} //resets channel to 0 when required		      
 	      	}
 	      
 	      }
@@ -290,27 +310,12 @@ if(runcapture) {//ready to start acquisition per user
 	      // Wait for another image to arrive.
 	      mmc.sleep(Math.min(.5 * exposureMs, 20));
 	   }
-	}
-	
+	}	
 	mmc.stopSequenceAcquisition();
 	// Have Micro-Manager handle logic for ensuring data is saved to disk.
 	mm.displays().manage(store);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-//gui.message("Acquiring frame " + i + ", channel " + channels[j] + ".");
 
 /*
  * Sequence Focus Programming	PROG_FOCUS,int Start, int Step,Int #steps,boolean direction,boolean slave	!…..inputs	NO NEGATIVES
