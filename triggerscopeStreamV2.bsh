@@ -281,7 +281,7 @@ if(runcapture) {//ready to start acquisition per user
 	      
 	      if(zStep != 0) { // z sweep active
 	      	
-	      	if(mode == 0) { //sweep all z then step channel
+	      	if(mode == 1) { //sweep all z then step channel
 		      	++slice;
 		      	if(slice == (int)zNumsteps) { //got to end of sweep
 		      		++channel; //switch channel
@@ -292,7 +292,7 @@ if(runcapture) {//ready to start acquisition per user
 			      	curFrame++;
 			   	} //resets channel to 0 when required		      
 	      	}	      
-	      if(mode == 1) { //Step channels then step Z
+	      if(mode == 0) { //Step channels then step Z
 		      	++channel;
 		      	if(channel == progline) { //got to end of channels
 		      		++slice; //switch channel
