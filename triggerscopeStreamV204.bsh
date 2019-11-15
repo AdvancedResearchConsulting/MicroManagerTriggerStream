@@ -1,7 +1,7 @@
 //Grab MDA settings and push to TG3
 //Note this was built on MM 2.0 BETA, haven't tried it in Gamma
 //Contact Austin Blanco @ Advanced Research Consulting for questions or support 
-// V 2.03
+// V 2.04
 /*
  * 
  * V201 updates
@@ -19,6 +19,10 @@
  * - added new var tgsFname -> used to control/override the focus device name
  * - added new step start and range outputs and calcs to support ^^ issue
  * 
+ * 204 updates
+ * - fixed handling issues w/ negative Z ranges in GUI
+ * - addressed output range control for inverted values
+ *
  * TODO
  * - auto-find focus device name
  * - colorize channels in final image
@@ -394,8 +398,8 @@ if(runcapture) {//ready to start acquisition per user
 
 
 /*
- * Sequence Focus Programming	PROG_FOCUS,int Start, int Step,Int #steps,boolean direction,boolean slave	!…..inputs	NO NEGATIVES
- * Sequence Focus Programming	PROG_FOCUS,int Start, int Step,Int #steps,boolean direction,boolean slave	!…..inputs	NO NEGATIVES
+ * Sequence Focus Programming	PROG_FOCUS,int Start, int Step,Int #steps,boolean direction,boolean slave	!Â…..inputs	NO NEGATIVES
+ * Sequence Focus Programming	PROG_FOCUS,int Start, int Step,Int #steps,boolean direction,boolean slave	!Â…..inputs	NO NEGATIVES
  * Sequence TTL Programming	PROG_TTL,int Program Line#, int TTL #, Boolean On/Off	!...	MaxProg Set by high #
  * Sequence DAC Programming	PROG_DAC,int Program Line#, int DAC #, int 16 bit output (0-65535)	!...	MaxProg Set by high # 
  * Delay Array Programming	PROG_DEL , int program line #, int millisecond delay	!...	Watch Timeout
